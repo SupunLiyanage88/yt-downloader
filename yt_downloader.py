@@ -10,5 +10,8 @@ def download_yt_video(url):
         ydl.download([url])
         
 if __name__== "__main__":
-    video_url = input("Enter the youtube video URL: ")
+    import sys, os
+    video_url = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("YT_URL", "")
+    if not video_url:
+        video_url = input("Enter the youtube video URL: ")
     download_yt_video(video_url)
