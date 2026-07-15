@@ -1,78 +1,108 @@
-import { mkdtemp, rm, open, readdir } from "node:fs/promises";
-import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import ytdl from "@distube/ytdl-core";
+import { Readable } from "node:stream";
+
+const YOUTUBE_REGEX = /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)[\w-]+/;
+
+function nodeStreamToWebStream(nodeStream: Readable): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      nodeStream.on("data", (chunk: Buffer) => {
+        controller.enqueue(new Uint8Array(chunk));
+      });
+      nodeStream.on("end", () => {
+        controller.close();
+      });
+      nodeStream.on("error", (err) => {
+        controller.error(err);
+      });
+    },
+  });
+}
 
 export async function POST(req: Request) {
-  let tempDir: string | null = null;
-
   try {
-    const { url } = await req.json();
+    const { url, mode, quality } = await req.json();
 
     if (!url || typeof url !== "string") {
       return Response.json({ error: "Missing or invalid URL" }, { status: 400 });
     }
 
-    if (!url.includes("youtube.com") && !url.includes("youtu.be")) {
+    if (!YOUTUBE_REGEX.test(url)) {
       return Response.json({ error: "URL does not appear to be a YouTube video" }, { status: 400 });
     }
 
-    tempDir = await mkdtemp(join(tmpdir(), "yt-dl-"));
-
-    const projectRoot = join(process.cwd(), "..");
-    const pythonExe = join(projectRoot, ".venv", "Scripts", "python.exe");
-
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn(pythonExe, [join(projectRoot, "yt_downloader.py"), url], {
-        cwd: tempDir!,
-        env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stderr = "";
-
-      proc.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on("close", (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(stderr.trim() || `Python process exited with code ${code}`));
-        }
-      });
-
-      proc.on("error", (err) => {
-        reject(new Error(`Failed to start Python: ${err.message}`));
-      });
-    });
-
-    const files = await readdir(tempDir);
-    const videoFile = files.find((f) =>
-      /\.(mp4|mkv|webm|mov)$/i.test(f)
-    );
-
-    if (!videoFile) {
-      throw new Error("No video file was downloaded");
+    if (!mode || (mode !== "video" && mode !== "audio")) {
+      return Response.json({ error: "Invalid mode. Must be 'video' or 'audio'." }, { status: 400 });
     }
 
-    const filePath = join(tempDir, videoFile);
-    const fileHandle = await open(filePath);
-    const ext = videoFile.split(".").pop() ?? "mp4";
+    let info: Awaited<ReturnType<typeof ytdl.getInfo>>;
+    try {
+      info = await ytdl.getInfo(url);
+    } catch {
+      return Response.json({ error: "Could not fetch video info. Check the URL and try again." }, { status: 400 });
+    }
 
-    return new Response(fileHandle.readableWebStream() as ReadableStream<Uint8Array>, {
+    const videoDetails = info.videoDetails;
+    const safeTitle = (videoDetails.title || "video")
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .replace(/\s+/g, "_")
+      .slice(0, 100);
+
+    if (mode === "audio") {
+      const audioFormats = ytdl.filterFormats(info.formats, "audioonly");
+      if (audioFormats.length === 0) {
+        return Response.json({ error: "No audio formats available for this video" }, { status: 400 });
+      }
+
+      const bestAudio = audioFormats.sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0))[0];
+      const ext = bestAudio.container === "webm" ? "webm" : "m4a";
+
+      const stream = ytdl(url, { quality: bestAudio.itag });
+
+      return new Response(nodeStreamToWebStream(stream), {
+        headers: {
+          "Content-Type": ext === "m4a" ? "audio/mp4" : "audio/webm",
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(safeTitle + "." + ext)}`,
+        },
+      });
+    }
+
+    const combinedFormats = info.formats.filter(
+      (f) => f.hasVideo && f.hasAudio && f.container === "mp4"
+    );
+
+    if (combinedFormats.length === 0) {
+      return Response.json(
+        { error: "No downloadable video formats available for this video" },
+        { status: 400 }
+      );
+    }
+
+    let selectedFormat: ytdl.videoFormat;
+
+    if (quality && quality !== "best") {
+      const qualityLabel = quality.replace("p", "");
+      selectedFormat = combinedFormats.find(
+        (f) => f.qualityLabel && f.qualityLabel.includes(qualityLabel)
+      ) || combinedFormats[combinedFormats.length - 1];
+    } else {
+      selectedFormat = combinedFormats.reduce((best, curr) => {
+        const bestH = parseInt(best.qualityLabel?.replace("p", "") || "0", 10);
+        const currH = parseInt(curr.qualityLabel?.replace("p", "") || "0", 10);
+        return currH > bestH ? curr : best;
+      });
+    }
+
+    const stream = ytdl(url, { quality: selectedFormat.itag });
+
+    return new Response(nodeStreamToWebStream(stream), {
       headers: {
-        "Content-Type": `video/${ext}`,
-        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(videoFile)}`,
+        "Content-Type": "video/mp4",
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(safeTitle + ".mp4")}`,
       },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return Response.json({ error: message }, { status: 500 });
-  } finally {
-    if (tempDir) {
-      rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    }
   }
 }

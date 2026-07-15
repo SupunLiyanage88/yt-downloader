@@ -81,12 +81,12 @@ const features = [
   {
     icon: <BoltIcon />,
     title: "Lightning Fast",
-    description: "Powered by yt-dlp for rapid downloads. No queues, no waiting.",
+    description: "Powered by ytdl-core for rapid downloads. No queues, no waiting.",
   },
   {
     icon: <ShieldIcon />,
-    title: "HD Quality",
-    description: "Up to 1080p. Best available format, every time.",
+    title: "Quality Choice",
+    description: "Pick your resolution: 360p to 1080p. Or grab just the audio.",
   },
   {
     icon: <GlobeIcon />,
@@ -97,6 +97,8 @@ const features = [
 
 export default function HomePage() {
   const [url, setUrl] = useState("");
+  const [mode, setMode] = useState<"video" | "audio">("video");
+  const [quality, setQuality] = useState("best");
   const [status, setStatus] = useState<"idle" | "downloading" | "done" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [theme, setTheme] = useState<"light" | "dark">("dark");
@@ -133,7 +135,7 @@ export default function HomePage() {
       const res = await fetch("/api/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, mode, quality }),
       });
 
       if (!res.ok) {
@@ -215,11 +217,11 @@ export default function HomePage() {
               </h1>
 
               <p className="mt-5 max-w-lg text-base leading-relaxed text-theme-secondary sm:text-lg">
-                Paste any YouTube link. Get pristine HD quality.
+                Paste any YouTube link. Choose video or audio, pick your quality.
                 No sign-ups, no limits, no fuss.
               </p>
 
-              <form onSubmit={handleSubmit} className="mt-8 max-w-xl">
+              <form onSubmit={handleSubmit} className="mt-8 max-w-xl space-y-3">
                 <div className="relative flex items-center gap-2 rounded-xl border border-theme bg-surface p-1.5 transition-theme focus-within:border-accent focus-within:shadow-accent">
                   <input
                     type="url"
@@ -247,6 +249,50 @@ export default function HomePage() {
                       </>
                     )}
                   </button>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="inline-flex rounded-lg border border-theme bg-surface p-0.5 transition-theme">
+                    <button
+                      type="button"
+                      onClick={() => setMode("video")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-theme ${
+                        mode === "video"
+                          ? "bg-accent text-white shadow-accent"
+                          : "text-theme-secondary hover:text-theme"
+                      }`}
+                    >
+                      Video
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode("audio")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-theme ${
+                        mode === "audio"
+                          ? "bg-accent text-white shadow-accent"
+                          : "text-theme-secondary hover:text-theme"
+                      }`}
+                    >
+                      Audio
+                    </button>
+                  </div>
+
+                  {mode === "video" && (
+                    <select
+                      value={quality}
+                      onChange={(e) => setQuality(e.target.value)}
+                      className="rounded-lg border border-theme bg-surface px-3 py-1.5 text-xs font-medium text-theme transition-theme focus:border-accent focus:outline-none focus:shadow-accent"
+                    >
+                      <option value="best">Best Quality</option>
+                      <option value="720">720p</option>
+                      <option value="480">480p</option>
+                      <option value="360">360p</option>
+                    </select>
+                  )}
+
+                  {mode === "audio" && (
+                    <span className="text-xs text-theme-muted">M4A (AAC)</span>
+                  )}
                 </div>
               </form>
 
@@ -349,7 +395,7 @@ export default function HomePage() {
               GitHub
             </a>
             <span>
-              Next.js + yt-dlp
+              Next.js + ytdl-core
             </span>
           </div>
         </div>
